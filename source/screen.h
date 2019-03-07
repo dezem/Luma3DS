@@ -1,6 +1,6 @@
 /*
 *   This file is part of Luma3DS
-*   Copyright (C) 2016-2018 Aurora Wright, TuxSH
+*   Copyright (C) 2016-2019 Aurora Wright, TuxSH
 *
 *   This program is free software: you can redistribute it and/or modify
 *   it under the terms of the GNU General Public License as published by
@@ -33,9 +33,9 @@
 
 #include "types.h"
 
-#define PDN_GPU_CNT (*(vu8  *)0x10141200)
+#define PDN_GPU_CNT (*(vu32 *)0x10141200)
 
-#define ARESCREENSINITIALIZED (PDN_GPU_CNT != 1)
+#define ARESCREENSINITIALIZED ((PDN_GPU_CNT & 0xFF) != 1)
 
 #define ARM11_PARAMETERS_ADDRESS 0x1FFFF000
 
@@ -64,6 +64,8 @@ typedef enum
 } Arm11Operation;
 
 extern struct fb fbs[2];
+
+extern bool needToSetupScreens;
 
 void prepareArm11ForFirmlaunch(void);
 void deinitScreens(void);

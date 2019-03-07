@@ -1,6 +1,6 @@
 /*
 *   This file is part of Luma3DS
-*   Copyright (C) 2016-2018 Aurora Wright, TuxSH
+*   Copyright (C) 2016-2019 Aurora Wright, TuxSH
 *
 *   This program is free software: you can redistribute it and/or modify
 *   it under the terms of the GNU General Public License as published by
@@ -40,6 +40,6 @@ typedef volatile u16 vu16;
 typedef volatile u32 vu32;
 typedef volatile u64 vu64;
 
-#define PDN_GPU_CNT (*(vu8  *)0x10141200)
+#define PDN_GPU_CNT (*(vu32 *)0x10141200)
 
-#define ARESCREENSINITIALIZED (PDN_GPU_CNT != 1)
+#define ARESCREENSINITIALIZED ((PDN_GPU_CNT & 0xFF) != 1)

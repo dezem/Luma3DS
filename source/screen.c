@@ -1,6 +1,6 @@
 /*
 *   This file is part of Luma3DS
-*   Copyright (C) 2016-2018 Aurora Wright, TuxSH
+*   Copyright (C) 2016-2019 Aurora Wright, TuxSH
 *
 *   This program is free software: you can redistribute it and/or modify
 *   it under the terms of the GNU General Public License as published by
@@ -34,6 +34,8 @@
 #include "memory.h"
 #include "i2c.h"
 #include "utils.h"
+
+bool needToSetupScreens = true;
 
 struct fb fbs[2] =
 {
@@ -92,11 +94,9 @@ void clearScreens(bool isAlternate)
 
 void initScreens(void)
 {
-    static bool needToSetup = true;
-
-    if(needToSetup)
+    if(needToSetupScreens)
     {
-        if(!ARESCREENSINITIALIZED)
+        if(!ARESCREENSINITIALIZED || bootType == FIRMLAUNCH)
         {
             *(vu32 *)ARM11_PARAMETERS_ADDRESS = brightness[MULTICONFIG(BRIGHTNESS)];
             memcpy((void *)(ARM11_PARAMETERS_ADDRESS + 4), fbs, sizeof(fbs));
@@ -111,7 +111,7 @@ void initScreens(void)
         invokeArm11Function(SETUP_FRAMEBUFFERS);
 
         clearScreens(true);
-        needToSetup = false;
+        needToSetupScreens = false;
     }
 
     clearScreens(false);

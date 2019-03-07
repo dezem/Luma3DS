@@ -1,6 +1,6 @@
 /*
 *   This file is part of Luma3DS
-*   Copyright (C) 2016-2018 Aurora Wright, TuxSH
+*   Copyright (C) 2016-2019 Aurora Wright, TuxSH
 *
 *   This program is free software: you can redistribute it and/or modify
 *   it under the terms of the GNU General Public License as published by
@@ -372,6 +372,7 @@ int GDB_SendStopReply(GDBContext *ctx, const DebugEventInfo *info)
                         default:
                             break;
                     }
+                    break;
                 }
 
                 case EXCEVENT_USER_BREAK:
