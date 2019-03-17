@@ -23,7 +23,7 @@
 *         or requiring that modified versions of such material be marked in
 *         reasonable ways as different from the original version.
 */
-
+#include <string.h>
 #include "utils.h"
 #include "globals.h"
 #include "synchronization.h"
@@ -31,11 +31,9 @@
 #include "svc.h"
 #include "svc/ConnectToPort.h"
 #include "svcHandler.h"
-#include "memory.h"
 
 struct KExtParameters
 {
-    u32 ALIGN(0x400) L2MMUTableFor0x40000000[256];
     u32 basePA;
     void *originalHandlers[4];
     u32 L1MMUTableAddrs[4];
@@ -43,21 +41,25 @@ struct KExtParameters
     CfwInfo cfwInfo;
 } kExtParameters = { .basePA = 0x12345678 }; // place this in .data
 
+static ALIGN(1024) u32 L2TableFor0x40000000[256] = {0};
+
 void relocateAndSetupMMU(u32 coreId, u32 *L1Table)
 {
     struct KExtParameters *p0 = (struct KExtParameters *)((u32)&kExtParameters - 0x40000000 + 0x18000000);
     struct KExtParameters *p = (struct KExtParameters *)((u32)&kExtParameters - 0x40000000 + p0->basePA);
+    u32 *L2Table = (u32 *)((u32)L2TableFor0x40000000 - 0x40000000 + p0->basePA);
 
     if(coreId == 0)
     {
         // Relocate ourselves, and clear BSS
+        // This is only OK because the jumps will be relative & there's no mode switch...
         memcpy((void *)p0->basePA, (const void *)0x18000000, __bss_start__ - __start__);
-        memset32((u32 *)(p0->basePA + (__bss_start__ - __start__)), 0, __bss_end__ - __bss_start__);
+        memset((u32 *)(p0->basePA + (__bss_start__ - __start__)), 0, __bss_end__ - __bss_start__);
 
         // Map the kernel ext to 0x40000000
         // 4KB extended small pages: [SYS:RW USR:-- X  TYP:NORMAL SHARED OUTER NOCACHE, INNER CACHED WB WA]
         for(u32 offset = 0; offset < (u32)(__end__ - __start__); offset += 0x1000)
-            p->L2MMUTableFor0x40000000[offset >> 12] = (p0->basePA + offset) | 0x516;
+            L2Table[offset >> 12] = (p0->basePA + offset) | 0x516;
 
         __asm__ __volatile__ ("sev");
     }
@@ -74,7 +76,7 @@ void relocateAndSetupMMU(u32 coreId, u32 *L1Table)
             L1Table[i + (VA >> 20)] = PA | attribs;
     }
 
-    L1Table[0x40000000 >> 20] = (u32)p->L2MMUTableFor0x40000000 | 1;
+    L1Table[0x40000000 >> 20] = (u32)L2Table | 1;
 
     p->L1MMUTableAddrs[coreId] = (u32)L1Table;
 }

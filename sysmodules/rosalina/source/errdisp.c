@@ -38,26 +38,16 @@ static inline void assertSuccess(Result res)
         svcBreak(USERBREAK_PANIC);
 }
 
-static MyThread errDispThread;
-static u8 ALIGN(8) errDispThreadStack[0x2000];
-
 static char userString[0x100 + 1] = {0};
-
-MyThread *errDispCreateThread(void)
-{
-    if(R_FAILED(MyThread_Create(&errDispThread, errDispThreadMain, errDispThreadStack, 0x2000, 0x18, CORE_SYSTEM)))
-        svcBreak(USERBREAK_PANIC);
-    return &errDispThread;
-}
 
 static inline u32 ERRF_DisplayRegisterValue(u32 posX, u32 posY, const char *name, u32 value)
 {
-    return Draw_DrawFormattedString(posX, posY, COLOR_WHITE, "%-9s %08x", name, value);
+    return Draw_DrawFormattedString(posX, posY, COLOR_WHITE, "%-9s %08lx", name, value);
 }
 
 static inline int ERRF_FormatRegisterValue(char *out, const char *name, u32 value)
 {
-    return sprintf(out, "%-9s %08x", name, value);
+    return sprintf(out, "%-9s %08lx", name, value);
 }
 
 static int ERRF_FormatError(char *out, ERRF_FatalErrInfo *info)
@@ -88,7 +78,7 @@ static int ERRF_FormatError(char *out, ERRF_FatalErrInfo *info)
         Handle processHandle;
         Result res;
 
-        out += sprintf(out, "\nProcess ID:       %u\n", info->procId);
+        out += sprintf(out, "\nProcess ID:       %lu\n", info->procId);
 
         res = svcOpenProcess(&processHandle, info->procId);
         if(R_SUCCEEDED(res))
@@ -149,9 +139,9 @@ static int ERRF_FormatError(char *out, ERRF_FatalErrInfo *info)
     else if(info->type != ERRF_ERRTYPE_CARD_REMOVED)
     {
         if(info->type != ERRF_ERRTYPE_FAILURE)
-            out += sprintf(out, "Address:          0x%08x\n", info->pcAddr);
+            out += sprintf(out, "Address:          0x%08lx\n", info->pcAddr);
 
-        out += sprintf(out, "Error code:       0x%08x\n", info->resCode);
+        out += sprintf(out, "Error code:       0x%08lx\n", info->resCode);
     }
 
     const char *desc;
@@ -235,8 +225,9 @@ static Result ERRF_SaveErrorToFile(ERRF_FatalErrInfo *info)
     return res;
 }
 
-static void ERRF_HandleCommands(void)
+void ERRF_HandleCommands(void *ctx)
 {
+    (void)ctx;
     u32 *cmdbuf = getThreadCommandBuffer();
 
     switch(cmdbuf[0] >> 16)
@@ -288,65 +279,4 @@ static void ERRF_HandleCommands(void)
             break;
         }
     }
-}
-
-void errDispThreadMain(void)
-{
-    Handle handles[2];
-    Handle serverHandle, clientHandle, sessionHandle = 0;
-
-    u32 replyTarget = 0;
-    s32 index;
-
-    Result res;
-    u32 *cmdbuf = getThreadCommandBuffer();
-
-    assertSuccess(svcCreatePort(&serverHandle, &clientHandle, "err:f", 1));
-
-    do
-    {
-        handles[0] = serverHandle;
-        handles[1] = sessionHandle;
-
-        if(replyTarget == 0) // k11
-            cmdbuf[0] = 0xFFFF0000;
-        res = svcReplyAndReceive(&index, handles, sessionHandle == 0 ? 1 : 2, replyTarget);
-
-        if(R_FAILED(res))
-        {
-            if((u32)res == 0xC920181A) // session closed by remote
-            {
-                svcCloseHandle(sessionHandle);
-                sessionHandle = 0;
-                replyTarget = 0;
-            }
-
-            else
-                svcBreak(USERBREAK_PANIC);
-        }
-
-        else
-        {
-            if(index == 0)
-            {
-                Handle session;
-                assertSuccess(svcAcceptSession(&session, serverHandle));
-
-                if(sessionHandle == 0)
-                    sessionHandle = session;
-                else
-                    svcCloseHandle(session);
-            }
-            else
-            {
-                ERRF_HandleCommands();
-                replyTarget = sessionHandle;
-            }
-        }
-    }
-    while(!terminationRequest);
-
-    svcCloseHandle(sessionHandle);
-    svcCloseHandle(clientHandle);
-    svcCloseHandle(serverHandle);
 }

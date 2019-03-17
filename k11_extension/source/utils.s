@@ -118,20 +118,20 @@ safecpy:
 
 _safecpy_end:
 
-.section .rodata
+.section .rodata.safecpy_sz, "a", %progbits
 
 .global safecpy_sz
 safecpy_sz: .word _safecpy_end - safecpy
 
-.bss
+.section .bss.SGI0Handler, "aw", %nobits
 .balign 4
 
 .global SGI0Handler
-SGI0Handler: .word 0  @ see synchronization.c
+SGI0Handler: .skip 4  @ see synchronization.c
 
 .balign 4
 
-.section .data
+.section .data.customInterruptEvent, "aw", %progbits
 .balign 4
 
 _customInterruptEventObj: .word SGI0Handler
