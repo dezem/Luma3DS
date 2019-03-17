@@ -258,6 +258,30 @@ void loadHomebrewFirm(u32 pressed)
     launchFirm((firm->reserved2[0] & 1) ? 2 : 1, argv);
 }
 
+void loadGWFirm(void)
+{
+    char path[10 + 255];
+    bool found = checkGWPayload(path);
+
+    if(!found) return;
+
+    u32 maxPayloadSize = (u32)((u8 *)0x27FFE000 - (u8 *)firm),
+        payloadSize = fileRead(firm, path, maxPayloadSize);
+
+    if(payloadSize <= 0x200 || !checkFirm(payloadSize)) error("The payload is invalid or corrupted.");
+
+    char absPath[24 + 255];
+
+    if(isSdMode) sprintf(absPath, "sdmc:/luma/%s", path);
+    else sprintf(absPath, "nand:/rw/luma/%s", path);
+
+    char *argv[2] = {absPath, (char *)fbs};
+
+    initScreens();
+
+    launchFirm((firm->reserved2[0] & 1) ? 2 : 1, argv);
+}
+
 static inline void mergeSection0(FirmwareType firmType, u32 firmVersion, bool loadFromStorage)
 {
     u32 srcModuleSize,

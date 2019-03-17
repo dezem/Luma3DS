@@ -121,6 +121,29 @@ bool fileDelete(const char *path)
     return f_unlink(path) == FR_OK;
 }
 
+bool checkGWPayload(char *path)
+{
+    const char *pattern;
+
+    pattern = PATTERN("gw");
+
+    DIR dir;
+    FILINFO info;
+    FRESULT result;
+
+    result = f_findfirst(&dir, &info, "gateway", pattern);
+
+    if(result != FR_OK) return false;
+
+    f_closedir(&dir);
+
+    if(!info.fname[0]) return false;
+
+    sprintf(path, "gateway/%s", info.fname);
+
+    return true;
+}
+
 bool findPayload(char *path, u32 pressed)
 {
     const char *pattern;

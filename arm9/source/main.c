@@ -343,7 +343,7 @@ boot:
     }
 
     if(nandType == FIRMWARE_EMUNAND) {
-        loadHomebrewFirm(BUTTON_DOWN);
+        loadGWFirm();
     }
     bool loadFromStorage = CONFIG(LOADEXTFIRMSANDMODULES);
     u32 firmVersion = loadNintendoFirm(&firmType, firmSource, loadFromStorage, isSafeMode);
