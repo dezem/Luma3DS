@@ -90,6 +90,65 @@ void GDB_RunServer(GDBServer *server)
     server_run(&server->super);
 }
 
+void GDB_LockAllContexts(GDBServer *server)
+{
+    for (u32 i = 0; i < MAX_DEBUG; i++)
+        RecursiveLock_Lock(&server->ctxs[i].lock);
+}
+
+void GDB_UnlockAllContexts(GDBServer *server)
+{
+    for (u32 i = MAX_DEBUG; i > 0; i--)
+        RecursiveLock_Unlock(&server->ctxs[i - 1].lock);
+}
+
+GDBContext *GDB_SelectAvailableContext(GDBServer *server, u16 minPort, u16 maxPort)
+{
+    GDBContext *ctx;
+    u16 port;
+
+    GDB_LockAllContexts(server);
+
+    // Get a context
+    u32 id;
+    for(id = 0; id < MAX_DEBUG && (server->ctxs[id].flags & GDB_FLAG_SELECTED); id++);
+    if(id < MAX_DEBUG)
+        ctx = &server->ctxs[id];
+    else
+    {
+        GDB_UnlockAllContexts(server);
+        return NULL;
+    }
+
+    // Get a port
+    for (port = minPort; port < maxPort; port++)
+    {
+        bool portUsed = false;
+        for(id = 0; id < MAX_DEBUG; id++)
+        {
+            if((server->ctxs[id].flags & GDB_FLAG_SELECTED) && server->ctxs[id].localPort == port)
+                portUsed = true;
+        }
+
+        if (!portUsed)
+            break;
+    }
+
+    if (port >= maxPort)
+    {
+        ctx->flags = ~GDB_FLAG_SELECTED;
+        ctx = NULL;
+    }
+    else
+    {
+        ctx->flags |= GDB_FLAG_SELECTED;
+        ctx->localPort = port;
+    }
+
+    GDB_UnlockAllContexts(server);
+    return ctx;
+}
+
 int GDB_AcceptClient(GDBContext *ctx)
 {
     RecursiveLock_Lock(&ctx->lock);
@@ -148,27 +207,36 @@ int GDB_CloseClient(GDBContext *ctx)
 
     svcClearEvent(ctx->clientAcceptedEvent);
     ctx->eventToWaitFor = ctx->clientAcceptedEvent;
+
+    ctx->localPort = 0;
     RecursiveLock_Unlock(&ctx->lock);
     return 0;
 }
 
 GDBContext *GDB_GetClient(GDBServer *server, u16 port)
 {
-    if(port < GDB_PORT_BASE || port >= GDB_PORT_BASE + sizeof(server->ctxs) / sizeof(GDBContext))
-        return NULL;
-
-    GDBContext *ctx = &server->ctxs[port - GDB_PORT_BASE];
-    if(!(ctx->flags & GDB_FLAG_USED) && (ctx->flags & GDB_FLAG_SELECTED))
+    GDB_LockAllContexts(server);
+    GDBContext *ctx = NULL;
+    if (port >= GDB_PORT_BASE && port < GDB_PORT_BASE + MAX_DEBUG)
     {
-        RecursiveLock_Lock(&ctx->lock);
-        ctx->flags |= GDB_FLAG_USED;
-        ctx->state = GDB_STATE_CONNECTED;
-        RecursiveLock_Unlock(&ctx->lock);
-
-        return ctx;
+        for (u32 i = 0; i < MAX_DEBUG; i++)
+        {
+            if ((server->ctxs[i].flags & GDB_FLAG_SELECTED) && server->ctxs[i].localPort == port)
+            {
+                ctx = &server->ctxs[i];
+                break;
+            }
+        }
     }
 
-    return NULL;
+    if (ctx != NULL)
+    {
+        ctx->flags |= GDB_FLAG_USED;
+        ctx->state = GDB_STATE_CONNECTED;
+    }
+
+    GDB_UnlockAllContexts(server);
+    return ctx;
 }
 
 void GDB_ReleaseClient(GDBServer *server, GDBContext *ctx)

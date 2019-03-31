@@ -9,8 +9,10 @@
 #include "util.h"
 #include "luma.h"
 
+static bool g_debugNextApplication = false;
+
 // Note: official PM has two distinct functions for sysmodule vs. regular app. We refactor that into a single function.
-static Result launchTitleImpl(Handle *debug, ProcessData **outProcessData, const FS_ProgramInfo *programInfo,
+static Result launchTitleImpl(Handle *outDebug, ProcessData **outProcessData, const FS_ProgramInfo *programInfo,
     const FS_ProgramInfo *programInfoUpdate, u32 launchFlags, ExHeader_Info *exheaderInfo);
 
 // Note: official PM doesn't include svcDebugActiveProcess in this function, but rather in the caller handling dependencies
@@ -22,6 +24,10 @@ static Result loadWithoutDependencies(Handle *outDebug, ProcessData **outProcess
     u32 pid;
     ProcessData *process;
     const ExHeader_Arm11SystemLocalCapabilities *localcaps = &exheaderInfo->aci.local_caps;
+
+    if (outDebug != NULL) {
+        *outDebug = 0;
+    }
 
     if (outProcessData != NULL) {
         *outProcessData = NULL;
@@ -83,7 +89,7 @@ static Result loadWithoutDependencies(Handle *outDebug, ProcessData **outProcess
         (*outProcessData)->flags |= PROCESSFLAG_NORMAL_APPLICATION; // not in official PM
     }
 
-    if (launchFlags & PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION) {
+    if (outDebug != NULL) {
         TRY(svcDebugActiveProcess(outDebug, pid));
     }
 
@@ -106,6 +112,11 @@ static Result loadWithDependencies(Handle *outDebug, ProcessData **outProcessDat
     ProcessData *process = *outProcessData;
 
     if (R_FAILED(res)) {
+        if (outDebug != NULL) {
+            svcCloseHandle(*outDebug);
+            *outDebug = 0;
+        }
+
         if (process != NULL) {
             svcTerminateProcess(process->handle);
         }
@@ -150,6 +161,11 @@ static Result loadWithDependencies(Handle *outDebug, ProcessData **outProcessDat
             remrefcounts[i] = 0;
             listMergeUniqueDependencies(depProcs, dependencies, remrefcounts, &numUnique, depExheaderInfo); // does some incref too
         } else if (process != NULL) {
+            if (outDebug != NULL) {
+                svcCloseHandle(*outDebug);
+                *outDebug = 0;
+            }
+
             svcTerminateProcess(process->handle);
             ExHeaderInfoHeap_Delete(depExheaderInfo);
             return res;
@@ -176,7 +192,9 @@ static Result launchTitleImpl(Handle *debug, ProcessData **outProcessData, const
     if (launchFlags & PMLAUNCHFLAG_NORMAL_APPLICATION) {
         launchFlags |= PMLAUNCHFLAG_LOAD_DEPENDENCIES;
     } else {
-        launchFlags &= ~(PMLAUNCHFLAG_USE_UPDATE_TITLE | PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION);
+        // NEW: allow non-apps to be debugged with the help of pm
+        //launchFlags &= ~(PMLAUNCHFLAG_USE_UPDATE_TITLE | PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION);
+        launchFlags &= ~PMLAUNCHFLAG_USE_UPDATE_TITLE;
         launchFlags &= ~(PMLAUNCHFLAG_FORCE_USE_O3DS_APP_MEM | PMLAUNCHFLAG_FORCE_USE_O3DS_MAX_APP_MEM);
     }
 
@@ -225,6 +243,7 @@ static Result launchTitleImpl(Handle *debug, ProcessData **outProcessData, const
         // note: official pm doesn't terminate the proc. if it fails here either, but will because of the svcCloseHandle and the svcRun codepath
     }
 
+    ProcessList_Lock(&g_manager.processList);
     ProcessData *process = *outProcessData;
     if (launchFlags & PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION) {
         // saved field is different in official pm
@@ -253,6 +272,7 @@ static Result launchTitleImpl(Handle *debug, ProcessData **outProcessData, const
         process->flags |= (launchFlags & PMLAUNCHFLAG_NOTIFY_TERMINATION) ? PROCESSFLAG_NOTIFY_TERMINATION : 0;
     }
 
+    ProcessList_Unlock(&g_manager.processList);
     return res;
 }
 
@@ -288,8 +308,10 @@ static void LaunchTitleAsync(void *argdata)
 Result LaunchTitle(u32 *outPid, const FS_ProgramInfo *programInfo, u32 launchFlags)
 {
     ProcessData *process, *foundProcess = NULL;
+    bool originallyDebugged = launchFlags & PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION;
 
     launchFlags &= ~PMLAUNCHFLAG_USE_UPDATE_TITLE;
+    launchFlags |= g_debugNextApplication && (launchFlags & PMLAUNCHFLAG_NORMAL_APPLICATION) ? PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION : 0;
 
     if (g_manager.preparingForReboot) {
         return 0xC8A05801;
@@ -303,11 +325,12 @@ Result LaunchTitle(u32 *outPid, const FS_ProgramInfo *programInfo, u32 launchFla
         panic(4);
     }
 
-    if ((g_manager.runningApplicationData != NULL || g_manager.debugData != NULL) && (launchFlags & PMLAUNCHFLAG_NORMAL_APPLICATION) != 0) {
+    ProcessList_Lock(&g_manager.processList);
+    if (g_manager.runningApplicationData != NULL && (launchFlags & PMLAUNCHFLAG_NORMAL_APPLICATION) != 0) {
+        ProcessList_Unlock(&g_manager.processList);
         return 0xC8A05BF0;
     }
 
-    ProcessList_Lock(&g_manager.processList);
     FOREACH_PROCESS(&g_manager.processList, process) {
         if ((process->titleId & ~0xFFULL) == (programInfo->programId & ~0xFFULL)) {
             foundProcess = process;
@@ -324,7 +347,15 @@ Result LaunchTitle(u32 *outPid, const FS_ProgramInfo *programInfo, u32 launchFla
         return 0;
     } else {
         if (launchFlags & PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION || !(launchFlags & PMLAUNCHFLAG_NORMAL_APPLICATION)) {
-            return launchTitleImplWrapper(NULL, outPid, programInfo, programInfo, launchFlags);
+            Result res = launchTitleImplWrapper(NULL, outPid, programInfo, programInfo, launchFlags);
+            if (R_SUCCEEDED(res) && (launchFlags & PMLAUNCHFLAG_NORMAL_APPLICATION)) {
+                g_debugNextApplication = false;
+                if (!originallyDebugged) {
+                    // Custom notification
+                    notifySubscribers(0x1000);
+                }
+            }
+            return res;
         } else {
             struct {
                 FS_ProgramInfo programInfo, programInfoUpdate;
@@ -342,20 +373,34 @@ Result LaunchTitle(u32 *outPid, const FS_ProgramInfo *programInfo, u32 launchFla
 
 Result LaunchTitleUpdate(const FS_ProgramInfo *programInfo, const FS_ProgramInfo *programInfoUpdate, u32 launchFlags)
 {
+    ProcessList_Lock(&g_manager.processList);
     if (g_manager.preparingForReboot) {
         return 0xC8A05801;
     }
-    if (g_manager.runningApplicationData != NULL || g_manager.debugData != NULL) {
+    if (g_manager.runningApplicationData != NULL) {
+        ProcessList_Unlock(&g_manager.processList);
         return 0xC8A05BF0;
     }
     if (!(launchFlags & ~PMLAUNCHFLAG_NORMAL_APPLICATION)) {
         return 0xD8E05802;
     }
+    ProcessList_Unlock(&g_manager.processList);
+
+    bool originallyDebugged = launchFlags & PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION;
 
     launchFlags |= PMLAUNCHFLAG_USE_UPDATE_TITLE;
+    launchFlags |= g_debugNextApplication ? PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION : 0;
 
     if (launchFlags & PMLAUNCHFLAG_QUEUE_DEBUG_APPLICATION) {
-        return launchTitleImplWrapper(NULL, NULL, programInfo, programInfoUpdate, launchFlags);
+        Result res = launchTitleImplWrapper(NULL, NULL, programInfo, programInfoUpdate, launchFlags);
+        if (R_SUCCEEDED(res)) {
+            g_debugNextApplication = false;
+            if (!originallyDebugged) {
+                // Custom notification
+                notifySubscribers(0x1000);
+            }
+        }
+        return res;
     } else {
         struct {
             FS_ProgramInfo programInfo, programInfoUpdate;
@@ -369,11 +414,15 @@ Result LaunchTitleUpdate(const FS_ProgramInfo *programInfo, const FS_ProgramInfo
 
 Result LaunchApp(const FS_ProgramInfo *programInfo, u32 launchFlags)
 {
-    if (g_manager.runningApplicationData != NULL || g_manager.debugData != NULL) {
+    ProcessList_Lock(&g_manager.processList);
+    if (g_manager.runningApplicationData != NULL) {
+        ProcessList_Unlock(&g_manager.processList);
         return 0xC8A05BF0;
     }
 
     assertSuccess(setAppCpuTimeLimit(0));
+    ProcessList_Unlock(&g_manager.processList);
+
     return LaunchTitle(NULL, programInfo, launchFlags | PMLAUNCHFLAG_LOAD_DEPENDENCIES | PMLAUNCHFLAG_NORMAL_APPLICATION);
 }
 
@@ -382,10 +431,13 @@ Result RunQueuedProcess(Handle *outDebug)
     Result res = 0;
     StartupInfo si = {0};
 
+    ProcessList_Lock(&g_manager.processList);
     if (g_manager.debugData == NULL) {
+        ProcessList_Unlock(&g_manager.processList);
         return 0xD8A05804;
     } else if ((g_manager.debugData->flags & PROCESSFLAG_NORMAL_APPLICATION) && g_manager.runningApplicationData != NULL) {
         // Not in official PM
+        ProcessList_Unlock(&g_manager.processList);
         return 0xC8A05BF0;
     }
 
@@ -416,23 +468,37 @@ Result RunQueuedProcess(Handle *outDebug)
     }
 
     ExHeaderInfoHeap_Delete(exheaderInfo);
+    ProcessList_Unlock(&g_manager.processList);
 
     return res;
 }
 
 Result LaunchAppDebug(Handle *outDebug, const FS_ProgramInfo *programInfo, u32 launchFlags)
 {
+    ProcessList_Lock(&g_manager.processList);
     if (g_manager.debugData != NULL) {
+        ProcessList_Unlock(&g_manager.processList);
         return RunQueuedProcess(outDebug);
     }
 
     if (g_manager.runningApplicationData != NULL) {
+        ProcessList_Unlock(&g_manager.processList);
         return 0xC8A05BF0;
     }
 
+    bool prevdbg = g_debugNextApplication;
+    g_debugNextApplication = false;
+
     assertSuccess(setAppCpuTimeLimit(0));
-    return launchTitleImplWrapper(outDebug, NULL, programInfo, programInfo,
+    ProcessList_Unlock(&g_manager.processList);
+
+    Result res = launchTitleImplWrapper(outDebug, NULL, programInfo, programInfo,
         (launchFlags & ~PMLAUNCHFLAG_USE_UPDATE_TITLE) | PMLAUNCHFLAG_NORMAL_APPLICATION);
+
+    if (R_FAILED(res)) {
+        g_debugNextApplication = prevdbg;
+    }
+    return res;
 }
 
 Result autolaunchSysmodules(void)
@@ -447,4 +513,27 @@ Result autolaunchSysmodules(void)
     }
 
     return res;
+}
+
+// Custom
+Result DebugNextApplicationByForce(void)
+{
+    g_debugNextApplication = true;
+    return 0;
+}
+
+Result LaunchTitleDebug(Handle *outDebug, const FS_ProgramInfo *programInfo, u32 launchFlags)
+{
+    if (launchFlags & PMLAUNCHFLAG_NORMAL_APPLICATION) {
+        return LaunchAppDebug(outDebug, programInfo, launchFlags);
+    }
+
+    ProcessList_Lock(&g_manager.processList);
+    if (g_manager.debugData != NULL) {
+        ProcessList_Unlock(&g_manager.processList);
+        return RunQueuedProcess(outDebug);
+    }
+    ProcessList_Unlock(&g_manager.processList);
+
+    return launchTitleImplWrapper(outDebug, NULL, programInfo, programInfo, launchFlags & ~PMLAUNCHFLAG_USE_UPDATE_TITLE);
 }
