@@ -71,13 +71,13 @@ static inline int ProcessListMenu_FormatInfoLine(char *out, const ProcessInfo *i
 
     else if(gdbServer.super.running && id < MAX_DEBUG)
     {
-        if(gdbServer.ctxs[id].state >= GDB_STATE_CONNECTED && gdbServer.ctxs[id].state < GDB_STATE_CLOSING)
+        if(gdbServer.ctxs[id].state >= GDB_STATE_CONNECTED && gdbServer.ctxs[id].state < GDB_STATE_DETACHING)
         {
             u8 *addr = (u8 *)&gdbServer.ctxs[id].super.addr_in.sin_addr;
             checkbox = "(A) ";
             sprintf(commentBuf, "Remote: %hhu.%hhu.%hhu.%hhu", addr[0], addr[1], addr[2], addr[3]);
         }
-        else
+        else if (gdbServer.ctxs[id].localPort >= GDB_PORT_BASE && gdbServer.ctxs[id].localPort < GDB_PORT_BASE + MAX_DEBUG)
         {
             checkbox = "(W) ";
             sprintf(commentBuf, "Port: %hu", gdbServer.ctxs[id].localPort);
@@ -606,7 +606,7 @@ static inline void ProcessListMenu_HandleSelected(const ProcessInfo *info)
             while(ctx->super.should_close)
                 svcSleepThread(12 * 1000 * 1000LL);
         }
-        else
+        else if (gdbServer.ctxs[id].localPort >= GDB_PORT_BASE && gdbServer.ctxs[id].localPort < GDB_PORT_BASE + MAX_DEBUG)
         {
             RecursiveLock_Lock(&ctx->lock);
             ctx->flags &= ~GDB_FLAG_SELECTED;
