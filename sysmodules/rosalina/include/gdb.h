@@ -57,21 +57,22 @@ typedef struct Breakpoint
     bool persistent;
 } Breakpoint;
 
-typedef enum GDBFlags
+enum
 {
     GDB_FLAG_SELECTED = 1,
     GDB_FLAG_USED  = 2,
-    GDB_FLAG_PROCESS_CONTINUING = 4,
-    GDB_FLAG_TERMINATE_PROCESS = 8,
-    GDB_FLAG_ATTACHED_AT_START = 16,
-} GDBFlags;
+    GDB_FLAG_ALLOCATED_MASK = GDB_FLAG_SELECTED | GDB_FLAG_USED,
+    GDB_FLAG_NOACK = 4,
+    GDB_FLAG_PROCESS_CONTINUING = 8,
+    GDB_FLAG_TERMINATE_PROCESS = 16,
+    GDB_FLAG_ATTACHED_AT_START = 32,
+};
 
 typedef enum GDBState
 {
     GDB_STATE_DISCONNECTED,
     GDB_STATE_CONNECTED,
     GDB_STATE_NOACK_SENT,
-    GDB_STATE_NOACK,
     GDB_STATE_DETACHING
 } GDBState;
 
@@ -91,7 +92,7 @@ typedef struct GDBContext
     RecursiveLock lock;
     u16 localPort;
 
-    GDBFlags flags;
+    u32 flags;
     GDBState state;
 
     u32 pid;

@@ -114,7 +114,7 @@ GDBContext *GDB_SelectAvailableContext(GDBServer *server, u16 minPort, u16 maxPo
 
     // Get a context
     u32 id;
-    for(id = 0; id < MAX_DEBUG && (server->ctxs[id].flags & GDB_FLAG_SELECTED); id++);
+    for(id = 0; id < MAX_DEBUG && (server->ctxs[id].flags & GDB_FLAG_ALLOCATED_MASK); id++);
     if(id < MAX_DEBUG)
         ctx = &server->ctxs[id];
     else
@@ -129,7 +129,7 @@ GDBContext *GDB_SelectAvailableContext(GDBServer *server, u16 minPort, u16 maxPo
         bool portUsed = false;
         for(id = 0; id < MAX_DEBUG; id++)
         {
-            if((server->ctxs[id].flags & GDB_FLAG_SELECTED) && server->ctxs[id].localPort == port)
+            if((server->ctxs[id].flags & GDB_FLAG_ALLOCATED_MASK) && server->ctxs[id].localPort == port)
                 portUsed = true;
         }
 
@@ -148,6 +148,19 @@ GDBContext *GDB_SelectAvailableContext(GDBServer *server, u16 minPort, u16 maxPo
         ctx->localPort = port;
     }
 
+    GDB_UnlockAllContexts(server);
+    return ctx;
+}
+
+GDBContext *GDB_FindAllocatedContextByPid(GDBServer *server, u32 pid)
+{
+    GDB_LockAllContexts(server);
+    GDBContext *ctx = NULL;
+    for(u32 i = 0; i < MAX_DEBUG; i++)
+    {
+        if((server->ctxs[i].flags & GDB_FLAG_ALLOCATED_MASK) && server->ctxs[i].pid == pid)
+            ctx = &server->ctxs[i];
+    }
     GDB_UnlockAllContexts(server);
     return ctx;
 }
@@ -203,8 +216,11 @@ void GDB_ReleaseClient(GDBServer *server, GDBContext *ctx)
     RecursiveLock_Lock(&ctx->lock);
     ctx->localPort = 0;
     ctx->enableExternalMemoryAccess = false;
-    ctx->flags = (GDBFlags)0;
+    ctx->flags = 0;
     ctx->state = GDB_STATE_DISCONNECTED;
+
+    ctx->catchThreadEvents = false;
+
     RecursiveLock_Unlock(&ctx->lock);
 }
 
@@ -250,7 +266,7 @@ int GDB_DoPacket(GDBContext *ctx)
     int ret;
 
     RecursiveLock_Lock(&ctx->lock);
-    GDBFlags oldFlags = ctx->flags;
+    u32 oldFlags = ctx->flags;
 
     if(ctx->state == GDB_STATE_DISCONNECTED)
         return -1;
