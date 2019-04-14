@@ -34,9 +34,11 @@ static const struct
     GDBCommandHandler handler;
 } gdbVerboseCommandHandlers[] =
 {
+    { "Attach", GDB_VERBOSE_HANDLER(Attach) },
     { "Cont?", GDB_VERBOSE_HANDLER(ContinueSupported) },
     { "Cont",  GDB_VERBOSE_HANDLER(Continue) },
     { "MustReplyEmpty", GDB_HANDLER(Unsupported) },
+    { "Run", GDB_VERBOSE_HANDLER(Run) },
 };
 
 GDB_DECLARE_HANDLER(VerboseCommand)
