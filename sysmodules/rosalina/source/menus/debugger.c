@@ -34,6 +34,7 @@
 #include "gdb/debug.h"
 #include "gdb/monitor.h"
 #include "gdb/net.h"
+#include "pmdbgext.h"
 
 Menu debuggerMenu = {
     "Debugger options menu",
@@ -52,7 +53,7 @@ static u8 ALIGN(8) debuggerDebugThreadStack[0x2000];
 
 GDBServer gdbServer = { 0 };
 
-static GDBContext *nextApplicationGdbCtx = NULL;
+GDBContext *nextApplicationGdbCtx = NULL;
 
 void debuggerSocketThreadMain(void);
 MyThread *debuggerCreateSocketThread(void)
@@ -68,8 +69,11 @@ MyThread *debuggerCreateDebugThread(void)
     return &debuggerDebugThread;
 }
 
-void debuggerSetNextApplicationDebugHandle(Handle debug)
+void debuggerFetchAndSetNextApplicationDebugHandleTask(void *argdata)
 {
+    (void)argdata;
+    Handle debug = 0;
+    PMDBG_RunQueuedProcess(&debug);
     GDB_LockAllContexts(&gdbServer);
     nextApplicationGdbCtx->debug = debug;
     if (debug == 0)
@@ -172,24 +176,32 @@ void DebuggerMenu_DebugNextApplicationByForce(void)
 
     if(initialized)
     {
-        res = PMDBG_DebugNextApplicationByForce();
-        if(R_SUCCEEDED(res))
+        GDB_LockAllContexts(&gdbServer);
+
+        if (nextApplicationGdbCtx != NULL)
+            strcpy(buf, "Operation already performed.");
+        else
         {
-            GDB_LockAllContexts(&gdbServer);
-            if (nextApplicationGdbCtx == NULL)
-                nextApplicationGdbCtx = GDB_SelectAvailableContext(&gdbServer, GDB_PORT_BASE + 3, GDB_PORT_BASE + 4);
+            nextApplicationGdbCtx = GDB_SelectAvailableContext(&gdbServer, GDB_PORT_BASE + 3, GDB_PORT_BASE + 4);
             if (nextApplicationGdbCtx != NULL)
             {
                 nextApplicationGdbCtx->debug = 0;
                 nextApplicationGdbCtx->pid = 0xFFFFFFFF;
-                sprintf(buf, "Operation succeeded.\nUse port %d to connect to the next launched\napplication.", nextApplicationGdbCtx->localPort);
+                res = PMDBG_DebugNextApplicationByForce();
+                if(R_SUCCEEDED(res))
+                    sprintf(buf, "Operation succeeded.\nUse port %d to connect to the next launched\napplication.", nextApplicationGdbCtx->localPort);
+                else
+                {
+                    nextApplicationGdbCtx->flags = 0;
+                    nextApplicationGdbCtx->localPort = 0;
+                    nextApplicationGdbCtx = NULL;
+                        sprintf(buf, "Operation failed (0x%08lx).", (u32)res);
+                }
             }
             else
                 strcpy(buf, "Failed to allocate a slot.\nPlease unselect a process in the process list first");
-            GDB_UnlockAllContexts(&gdbServer);
         }
-        else
-            sprintf(buf, "Operation failed (0x%08lx).", (u32)res);
+        GDB_UnlockAllContexts(&gdbServer);
     }
     else
         strcpy(buf, "Debugger not enabled.");

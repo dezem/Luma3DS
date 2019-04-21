@@ -355,10 +355,10 @@ error:
     while(true);
 }
 
-bool loadTitleExheader(u64 progId, ExHeader_Info *exheader)
+bool loadTitleExheaderInfo(u64 progId, ExHeader_Info *exheaderInfo)
 {
     /* Here we look for "/luma/titles/[u64 titleID in hex, uppercase]/exheader.bin"
-       If it exists it should be a decrypted exheader */
+       If it exists it should be a decrypted exheader / exheader info */
 
     char path[] = "/luma/titles/0000000000000000/exheader.bin";
     progIdToStr(path + 28, progId);
@@ -374,7 +374,7 @@ bool loadTitleExheader(u64 progId, ExHeader_Info *exheader)
     {
         u64 total;
 
-        if(R_FAILED(IFile_Read(&file, &total, exheader, sizeof(ExHeader_Info))) || total != sizeof(ExHeader_Info)) goto error;
+        if(R_FAILED(IFile_Read(&file, &total, exheaderInfo, sizeof(ExHeader_Info))) || total != sizeof(ExHeader_Info)) goto error;
     }
 
     IFile_Close(&file);
@@ -530,7 +530,7 @@ static inline bool patchLayeredFs(u64 progId, u8 *code, u32 size, u32 textSize, 
 
     romfsRedirPatchSubstituted1 = *(u32 *)(code + fsOpenFileDirectly);
     romfsRedirPatchHook1 = MAKE_BRANCH(payloadOffset + (u32)&romfsRedirPatchHook1 - (u32)romfsRedirPatch, fsOpenFileDirectly + 4);
-    romfsRedirPatchSubstituted1 = *(u32 *)(code + fsTryOpenFile);
+    romfsRedirPatchSubstituted2 = *(u32 *)(code + fsTryOpenFile);
     romfsRedirPatchHook2 = MAKE_BRANCH(payloadOffset + (u32)&romfsRedirPatchHook2 - (u32)romfsRedirPatch, fsTryOpenFile + 4);
     romfsRedirPatchCustomPath = pathAddress;
     romfsRedirPatchFsMountArchive = 0x100000 + fsMountArchive;

@@ -70,7 +70,7 @@ Result GDB_AttachToProcess(GDBContext *ctx)
     // The second case will have, after RunQueuedProcess: attach process, debugger break, attach thread (with creator = 0)
 
     if (!(ctx->flags & GDB_FLAG_ATTACHED_AT_START))
-        svcDebugActiveProcess(&ctx->debug, ctx->pid);
+        r = svcDebugActiveProcess(&ctx->debug, ctx->pid);
     else
     {
         r = 0;
@@ -143,9 +143,6 @@ void GDB_DetachFromProcess(GDBContext *ctx)
     memset(ctx->threadListData, 0, sizeof(ctx->threadListData));
     ctx->threadListDataPos = 0;
 
-    svcClearEvent(ctx->processAttachedEvent);
-    ctx->eventToWaitFor = ctx->processAttachedEvent;
-
     //svcSignalEvent(server->statusUpdated);
 
     /*
@@ -175,12 +172,15 @@ void GDB_DetachFromProcess(GDBContext *ctx)
     ctx->eventToWaitFor = ctx->processAttachedEvent;
     ctx->continueFlags = (DebugFlags)(DBG_SIGNAL_FAULT_EXCEPTION_EVENTS | DBG_INHIBIT_USER_CPU_EXCEPTION_HANDLERS);
     ctx->pid = 0;
-    ctx->currentThreadId = ctx->selectedThreadId = ctx->selectedThreadIdForContinuing = 0;
+    ctx->currentThreadId = 0;
+    ctx->selectedThreadId = 0;
+    ctx->selectedThreadIdForContinuing = 0;
     ctx->nbThreads = 0;
     ctx->totalNbCreatedThreads = 0;
     memset(ctx->threadInfos, 0, sizeof(ctx->threadInfos));
 
-    ctx->state = GDB_STATE_CONNECTED;
+    ctx->currentHioRequestTargetAddr = 0;
+    memset(&ctx->currentHioRequest, 0, sizeof(PackedGdbHioRequest));
 }
 
 Result GDB_CreateProcess(GDBContext *ctx, const FS_ProgramInfo *progInfo, u32 launchFlags)
@@ -206,7 +206,11 @@ GDB_DECLARE_HANDLER(Unsupported)
 
 GDB_DECLARE_HANDLER(EnableExtendedMode)
 {
-
-    ctx->flags |= GDB_FLAG_EXTENDED_REMOTE;
-    return GDB_ReplyOk(ctx);
+    if (ctx->localPort >= GDB_PORT_BASE && ctx->localPort < GDB_PORT_BASE + MAX_DEBUG)
+    {
+        ctx->flags |= GDB_FLAG_EXTENDED_REMOTE;
+        return GDB_ReplyOk(ctx);
+    }
+    else
+        return GDB_ReplyEmpty(ctx);
 }
