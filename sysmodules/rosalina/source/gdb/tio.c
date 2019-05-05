@@ -1,27 +1,8 @@
 /*
-*   This file is part of Luma3DS
+*   This file is part of Luma3DS.
 *   Copyright (C) 2016-2019 Aurora Wright, TuxSH
 *
-*   This program is free software: you can redistribute it and/or modify
-*   it under the terms of the GNU General Public License as published by
-*   the Free Software Foundation, either version 3 of the License, or
-*   (at your option) any later version.
-*
-*   This program is distributed in the hope that it will be useful,
-*   but WITHOUT ANY WARRANTY; without even the implied warranty of
-*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*   GNU General Public License for more details.
-*
-*   You should have received a copy of the GNU General Public License
-*   along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*
-*   Additional Terms 7.b and 7.c of GPLv3 apply to this file:
-*       * Requiring preservation of specified reasonable legal notices or
-*         author attributions in that material or in the Appropriate Legal
-*         Notices displayed by works containing it.
-*       * Prohibiting misrepresentation of the origin of that material,
-*         or requiring that modified versions of such material be marked in
-*         reasonable ways as different from the original version.
+*   SPDX-License-Identifier: (MIT OR GPL-2.0-or-later)
 */
 
 #include <string.h>
@@ -332,6 +313,7 @@ GDB_DECLARE_TIO_HANDLER(Close)
 
 GDB_DECLARE_TIO_HANDLER(Read)
 {
+    // GDB, with it code quality we're all aware of, always ask to read GDB_BUF_LEN, even if the packet can't fit...
     // "$F<num>;<data>#XX"
     char buf2[GDB_BUF_LEN - 4];
     u8 buf[sizeof(buf2) - 2 - 8];
@@ -355,10 +337,13 @@ GDB_DECLARE_TIO_HANDLER(Read)
     if (err != 0)
         return GDB_TioReplyErrno(ctx, err);
 
-    int pos = sprintf(buf2, "F%lx;", (u32)numRead);
-    u32 actualCount = GDB_EscapeBinaryData(buf2 + pos, buf, (u32)numRead, sizeof(buf));
+    char hdr[16];
+    u32 encodedCount;
+    u32 actualCount = GDB_EscapeBinaryData(&encodedCount, buf2 + 10, buf, (u32)numRead, sizeof(buf));
+    sprintf(hdr, "F%08lx;", (u32)actualCount); // buffer might not fit the entire read data
+    memcpy(buf2, hdr, 10);
 
-    return GDB_SendPacket(ctx, buf2, pos + actualCount);
+    return GDB_SendPacket(ctx, buf2, 10 + encodedCount);
 }
 
 GDB_DECLARE_TIO_HANDLER(Write)
@@ -448,9 +433,10 @@ GDB_DECLARE_TIO_HANDLER(Stat)
     GDB_TioMakeStructStat(&gdbStFinal, &gdbSt);
 
     char buf[3 + 2 * sizeof(struct gdbhio_stat)] = "F0;";
-    u32 actualCount = GDB_EscapeBinaryData(buf + 3, buf, sizeof(struct gdbhio_stat), 2 * sizeof(struct gdbhio_stat));
+    u32 encodedCount;
+    GDB_EscapeBinaryData(&encodedCount, buf + 3, buf, sizeof(struct gdbhio_stat), 2 * sizeof(struct gdbhio_stat));
 
-    return GDB_SendPacket(ctx, buf, 3 + actualCount);
+    return GDB_SendPacket(ctx, buf, 3 + encodedCount);
 }
 
 GDB_DECLARE_TIO_HANDLER(Unlink)
