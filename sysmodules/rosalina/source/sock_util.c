@@ -148,13 +148,13 @@ void server_run(struct sock_server *serv)
 {
     struct pollfd *fds = serv->poll_fds;
     Handle handles[2] = { terminationRequestEvent, serv->shall_terminate_event };
+    s32 idx = -1;
 
     serv->running = true;
     svcSignalEvent(serv->started_event);
-
     while(serv->running && !terminationRequest)
     {
-        s32 idx = -1;
+        idx = -1;
         if(svcWaitSynchronizationN(&idx, handles, 2, false, 0LL) == 0)
             goto abort_connections;
 
@@ -170,11 +170,15 @@ void server_run(struct sock_server *serv)
             fds[i].revents = 0;
         int pollres = socPoll(fds, serv->nfds, 50);
 
+        idx = -1;
+        if(svcWaitSynchronizationN(&idx, handles, 2, false, 0LL) == 0)
+            goto abort_connections;
+
         for(nfds_t i = 0; pollres > 0 && i < serv->nfds; i++)
         {
             struct sock_ctx *curr_ctx = serv->ctx_ptrs[i];
 
-            if((fds[i].revents & POLLHUP) || curr_ctx->should_close)
+            if((fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) || curr_ctx->should_close)
                 server_close_ctx(serv, curr_ctx);
 
             else if(fds[i].revents & POLLIN)
@@ -200,6 +204,7 @@ void server_run(struct sock_server *serv)
                         {
                             fds[serv->nfds].fd = client_sockfd;
                             fds[serv->nfds].events = POLLIN;
+                            fds[serv->nfds].revents = 0;
 
                             int new_idx = serv->nfds;
                             serv->nfds++;
@@ -210,6 +215,7 @@ void server_run(struct sock_server *serv)
                             new_ctx->serv = curr_ctx;
                             new_ctx->i = new_idx;
                             new_ctx->n = 0;
+                            new_ctx->should_close = false;
 
                             serv->ctx_ptrs[new_idx] = new_ctx;
 
@@ -228,6 +234,10 @@ void server_run(struct sock_server *serv)
             }
         }
 
+        idx = -1;
+        if(svcWaitSynchronizationN(&idx, handles, 2, false, 0LL) == 0)
+            goto abort_connections;
+
         if(serv->compact_needed)
             compact(serv);
     }
@@ -244,18 +254,40 @@ void server_run(struct sock_server *serv)
     return;
 
 abort_connections:
-    for(unsigned int i = 0; i < serv->nfds; i++)
+    server_kill_connections(serv);
+
+    serv->running = false;
+    svcClearEvent(serv->started_event);
+}
+
+void server_set_should_close_all(struct sock_server *serv)
+{
+    nfds_t nfds = serv->nfds;
+
+    for(unsigned int i = 0; i < nfds; i++)
+        serv->ctx_ptrs[i]->should_close = true;
+}
+
+void server_kill_connections(struct sock_server *serv)
+{
+    struct pollfd *fds = serv->poll_fds;
+    nfds_t nfds = serv->nfds;
+
+    for(unsigned int i = 0; i < nfds; i++)
     {
+        if(fds[i].fd == -1)
+            continue;
+
         struct linger linger;
         linger.l_onoff = 1;
         linger.l_linger = 0;
 
         socSetsockopt(fds[i].fd, SOL_SOCKET, SO_LINGER, &linger, sizeof(struct linger));
         socClose(fds[i].fd);
-    }
+        fds[i].fd = -1;
 
-    serv->running = false;
-    svcClearEvent(serv->started_event);
+        serv->ctx_ptrs[i]->should_close = true;
+    }
 }
 
 void server_finalize(struct sock_server *serv)
