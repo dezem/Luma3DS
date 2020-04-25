@@ -1,6 +1,6 @@
 /*
 *   This file is part of Luma3DS
-*   Copyright (C) 2016-2019 Aurora Wright, TuxSH
+*   Copyright (C) 2016-2020 Aurora Wright, TuxSH
 *
 *   This program is free software: you can redistribute it and/or modify
 *   it under the terms of the GNU General Public License as published by
@@ -32,7 +32,7 @@
 #include "draw.h"
 #include "hbloader.h"
 #include "fmt.h"
-#include "utils.h" // for makeARMBranch
+#include "utils.h" // for makeArmBranch
 #include "minisoc.h"
 #include "ifile.h"
 #include "pmdbgext.h"
@@ -352,8 +352,8 @@ void MiscellaneousMenu_SyncTimeDate(void)
 
         if(input & BUTTON_LEFT) utcOffset = (24 + utcOffset - 1) % 24; // ensure utcOffset >= 0
         if(input & BUTTON_RIGHT) utcOffset = (utcOffset + 1) % 24;
-		if(input & BUTTON_UP) utcOffsetMinute = (utcOffsetMinute + 1) % 60;
-		if(input & BUTTON_DOWN) utcOffsetMinute = (60 + utcOffsetMinute - 1) % 60;
+        if(input & BUTTON_UP) utcOffsetMinute = (utcOffsetMinute + 1) % 60;
+        if(input & BUTTON_DOWN) utcOffsetMinute = (60 + utcOffsetMinute - 1) % 60;
         Draw_FlushFramebuffer();
         Draw_Unlock();
     }
@@ -373,7 +373,7 @@ void MiscellaneousMenu_SyncTimeDate(void)
         if(R_SUCCEEDED(res))
         {
             t += 3600 * utcOffset;
-			t += 60 * utcOffsetMinute;
+            t += 60 * utcOffsetMinute;
             gmtime_r(&t, &localt);
             res = ntpSetTimeDate(&localt);
         }
