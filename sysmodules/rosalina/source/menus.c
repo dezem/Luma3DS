@@ -30,7 +30,6 @@
 #include "menu.h"
 #include "draw.h"
 #include "menus/process_list.h"
-#include "menus/process_patches.h"
 #include "menus/n3ds.h"
 #include "menus/debugger.h"
 #include "menus/miscellaneous.h"
@@ -39,24 +38,60 @@
 #include "ifile.h"
 #include "memory.h"
 #include "fmt.h"
+#include "process_patches.h"
 
 Menu rosalinaMenu = {
     "Rosalina menu",
-    .nbItems = 11,
     {
-        { "New 3DS menu...", MENU, .menu = &N3DSMenu },
+        { "Take screenshot", METHOD, .method = &RosalinaMenu_TakeScreenshot },
+        { "Change screen brightness", METHOD, .method = &RosalinaMenu_ChangeScreenBrightness },
         { "Cheats...", METHOD, .method = &RosalinaMenu_Cheats },
         { "Process list", METHOD, .method = &RosalinaMenu_ProcessList },
-        { "Take screenshot (slow!)", METHOD, .method = &RosalinaMenu_TakeScreenshot },
         { "Debugger options...", MENU, .menu = &debuggerMenu },
         { "System configuration...", MENU, .menu = &sysconfigMenu },
         { "Screen filters...", MENU, .menu = &screenFiltersMenu },
+        { "New 3DS menu...", MENU, .menu = &N3DSMenu, .visibility = &menuCheckN3ds },
         { "Miscellaneous options...", MENU, .menu = &miscellaneousMenu },
         { "Power off", METHOD, .method = &RosalinaMenu_PowerOff },
         { "Reboot", METHOD, .method = &RosalinaMenu_Reboot },
-        { "Credits", METHOD, .method = &RosalinaMenu_ShowCredits }
+        { "Credits", METHOD, .method = &RosalinaMenu_ShowCredits },
+        { "Debug info", METHOD, .method = &RosalinaMenu_ShowDebugInfo, .visibility = &rosalinaMenuShouldShowDebugInfo },
+        {},
     }
 };
+
+bool rosalinaMenuShouldShowDebugInfo(void)
+{
+    return true;
+}
+
+void RosalinaMenu_ShowDebugInfo(void)
+{
+    Draw_Lock();
+    Draw_ClearFramebuffer();
+    Draw_FlushFramebuffer();
+    Draw_Unlock();
+
+    char memoryMap[512];
+    formatMemoryMapOfProcess(memoryMap, 511, CUR_PROCESS_HANDLE);
+
+    s64 kextAddrSize;
+    svcGetSystemInfo(&kextAddrSize, 0x10000, 0x300);
+    u32 kextPa = (u32)((u64)kextAddrSize >> 32);
+    u32 kextSize = (u32)kextAddrSize;
+
+    do
+    {
+        Draw_Lock();
+        Draw_DrawString(10, 10, COLOR_TITLE, "Rosalina -- Debug info");
+
+        u32 posY = Draw_DrawString(10, 30, COLOR_WHITE, memoryMap);
+        Draw_DrawFormattedString(10, posY, COLOR_WHITE, "Kernel ext PA: %08lx - %08lx\n", kextPa, kextPa + kextSize);
+        Draw_FlushFramebuffer();
+        Draw_Unlock();
+    }
+    while(!(waitInput() & KEY_B) && !menuShouldExit);
+}
 
 void RosalinaMenu_ShowCredits(void)
 {
@@ -89,7 +124,7 @@ void RosalinaMenu_ShowCredits(void)
         Draw_FlushFramebuffer();
         Draw_Unlock();
     }
-    while(!(waitInput() & BUTTON_B) && !terminationRequest);
+    while(!(waitInput() & KEY_B) && !menuShouldExit);
 }
 
 void RosalinaMenu_Reboot(void)
@@ -109,15 +144,118 @@ void RosalinaMenu_Reboot(void)
 
         u32 pressed = waitInputWithTimeout(1000);
 
-        if(pressed & BUTTON_A)
+        if(pressed & KEY_A)
         {
             menuLeave();
             APT_HardwareResetAsync();
             return;
-        } else if(pressed & BUTTON_B)
+        } else if(pressed & KEY_B)
             return;
     }
-    while(!terminationRequest);
+    while(!menuShouldExit);
+}
+
+static u32 gspPatchAddrN3ds, gspPatchValuesN3ds[2];
+static bool gspPatchDoneN3ds;
+
+static Result RosalinaMenu_PatchN3dsGspForBrightness(u32 size)
+{
+    u32 *off = (u32 *)0x00100000;
+    u32 *end = (u32 *)(0x00100000 + size);
+
+    for (; off < end && (off[0] != 0xE92D4030 || off[1] != 0xE1A04000 || off[2] != 0xE2805C01 || off[3] != 0xE5D0018C); off++);
+
+    if (off >= end) {
+        return -1;
+    }
+
+    gspPatchAddrN3ds = (u32)off;
+    gspPatchValuesN3ds[0] = off[26];
+    gspPatchValuesN3ds[1] = off[50];
+
+    // NOP brightness changing in GSP
+    off[26] = 0xE1A00000;
+    off[50] = 0xE1A00000;
+
+    return 0;
+}
+static Result RosalinaMenu_RevertN3dsGspPatch(u32 size)
+{
+    (void)size;
+
+    u32 *off = (u32 *)gspPatchAddrN3ds;
+    off[26] = gspPatchValuesN3ds[0];
+    off[50] = gspPatchValuesN3ds[1];
+
+    return 0;
+}
+
+void RosalinaMenu_ChangeScreenBrightness(void)
+{
+    Result patchResult = 0;
+    if (isN3DS && !gspPatchDoneN3ds)
+    {
+        patchResult = PatchProcessByName("gsp", RosalinaMenu_PatchN3dsGspForBrightness);
+        gspPatchDoneN3ds = R_SUCCEEDED(patchResult);
+    }
+
+    Draw_Lock();
+    Draw_ClearFramebuffer();
+    Draw_FlushFramebuffer();
+    Draw_Unlock();
+
+    do
+    {
+        // Assume the current brightness for both screens are the same.
+        s32 brightness = (s32)(LCD_TOP_BRIGHTNESS & 0xFF);
+
+        Draw_Lock();
+        Draw_DrawString(10, 10, COLOR_TITLE, "Rosalina menu");
+        u32 posY = 30;
+        posY = Draw_DrawFormattedString(10, posY, COLOR_WHITE, "Current brightness (0..255): %3lu\n\n", brightness);
+        if (R_SUCCEEDED(patchResult))
+        {
+            posY = Draw_DrawString(10, posY, COLOR_WHITE, "Press Up/Down for +-1, Right/Left for +-10.\n");
+            posY = Draw_DrawString(10, posY, COLOR_WHITE, "Press Y to revert the GSP patch and exit.\n\n");
+
+            posY = Draw_DrawString(10, posY, COLOR_RED, "WARNING: \n");
+            posY = Draw_DrawString(10, posY, COLOR_WHITE, "  * avoid using values far higher than the presets.\n");
+            posY = Draw_DrawString(10, posY, COLOR_WHITE, "  * normal brightness mngmt. is now broken on N3DS.\nYou'll need to press Y to revert");
+        }
+        else
+            Draw_DrawFormattedString(10, posY, COLOR_WHITE, "Failed to patch GSP (0x%08lx).", (u32)patchResult);
+
+        Draw_FlushFramebuffer();
+        Draw_Unlock();
+
+        u32 pressed = waitInputWithTimeout(1000);
+
+        if ((pressed & DIRECTIONAL_KEYS) && R_SUCCEEDED(patchResult))
+        {
+            if (pressed & KEY_UP)
+                brightness += 1;
+            else if (pressed & KEY_DOWN)
+                brightness -= 1;
+            else if (pressed & KEY_RIGHT)
+                brightness += 10;
+            else if (pressed & KEY_LEFT)
+                brightness -= 10;
+
+            brightness = brightness < 0 ? 0 : brightness;
+            brightness = brightness > 255 ? 255 : brightness;
+            LCD_TOP_BRIGHTNESS = (u32)brightness;
+            LCD_BOT_BRIGHTNESS = (u32)brightness;
+        }
+        else if ((pressed & KEY_Y) && gspPatchDoneN3ds)
+        {
+            patchResult = PatchProcessByName("gsp", RosalinaMenu_RevertN3dsGspPatch);
+            gspPatchDoneN3ds = !R_SUCCEEDED(patchResult);
+            return;
+        }
+        else if (pressed & KEY_B)
+            return;
+    }
+    while (!menuShouldExit);
 }
 
 void RosalinaMenu_PowerOff(void) // Soft shutdown.
@@ -137,16 +275,16 @@ void RosalinaMenu_PowerOff(void) // Soft shutdown.
 
         u32 pressed = waitInputWithTimeout(1000);
 
-        if(pressed & BUTTON_A)
+        if(pressed & KEY_A)
         {
             menuLeave();
             srvPublishToSubscriber(0x203, 0);
             return;
         }
-        else if(pressed & BUTTON_B)
+        else if(pressed & KEY_B)
             return;
     }
-    while(!terminationRequest);
+    while(!menuShouldExit);
 }
 
 
@@ -310,7 +448,7 @@ end:
         Draw_FlushFramebuffer();
         Draw_Unlock();
     }
-    while(!(waitInput() & BUTTON_B) && !terminationRequest);
+    while(!(waitInput() & KEY_B) && !menuShouldExit);
 
 #undef TRY
 }

@@ -36,7 +36,6 @@
 #include "gdb/server.h"
 #include "pmdbgext.h"
 
-#define MAP_BASE                0x10000000
 #define SYSCOREVER              (*(vu32 *)0x1FF80010)
 #define APPMEMTYPE              (*(vu32 *)0x1FF80030)
 
@@ -249,8 +248,10 @@ void HBLDR_HandleCommands(void *ctx)
                 break;
             }
 
+            // note: mappableFree doesn't do anything
             u32 tmp = 0;
-            res = svcControlMemoryEx(&tmp, MAP_BASE, 0, totalSize, MEMOP_ALLOC | flags, MEMPERM_READ | MEMPERM_WRITE, true);
+            u32 *addr = mappableAlloc(totalSize);
+            res = svcControlMemoryEx(&tmp, (u32)addr, 0, totalSize, MEMOP_ALLOC | flags, MEMPERM_READ | MEMPERM_WRITE, true);
             if (R_FAILED(res))
             {
                 IFile_Close(&file);
@@ -258,12 +259,12 @@ void HBLDR_HandleCommands(void *ctx)
                 break;
             }
 
-            Handle hCodeset = Ldr_CodesetFrom3dsx(name, (u32*)MAP_BASE, baseAddr, &file, tid);
+            Handle hCodeset = Ldr_CodesetFrom3dsx(name, addr, baseAddr, &file, tid);
             IFile_Close(&file);
 
             if (!hCodeset)
             {
-                svcControlMemory(&tmp, MAP_BASE, 0, totalSize, MEMOP_FREE, 0);
+                svcControlMemory(&tmp, (u32)addr, 0, totalSize, MEMOP_FREE, 0);
                 error(cmdbuf, MAKERESULT(RL_PERMANENT, RS_INTERNAL, RM_LDR, RD_NOT_FOUND));
                 break;
             }
@@ -345,7 +346,7 @@ void HBLDR_HandleCommands(void *ctx)
             // See the big comment in sysmodules/pm/source/reslimit.c for technical details.
             localcaps0->reslimits[0] = BIT(7) | 89;
 
-            localcaps0->storage_info.fs_access_info = 0xFFFFFFFF; // Give access to everything
+            //localcaps0->storage_info.fs_access_info = 0xFFFFFFFF; // Give access to everything
             localcaps0->storage_info.no_romfs = true;
             localcaps0->storage_info.use_extended_savedata_access = true; // Whatever
 

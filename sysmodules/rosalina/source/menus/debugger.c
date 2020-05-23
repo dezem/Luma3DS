@@ -38,11 +38,11 @@
 
 Menu debuggerMenu = {
     "Debugger options menu",
-    .nbItems = 3,
     {
         { "Enable debugger",                        METHOD, .method = &DebuggerMenu_EnableDebugger  },
         { "Disable debugger",                       METHOD, .method = &DebuggerMenu_DisableDebugger },
         { "Force-debug next application at launch", METHOD, .method = &DebuggerMenu_DebugNextApplicationByForce },
+        {},
     }
 };
 
@@ -139,13 +139,13 @@ void DebuggerMenu_EnableDebugger(void)
             if(!done)
             {
                 res = GDB_InitializeServer(&gdbServer);
-                Handle handles[3] = { gdbServer.super.started_event, gdbServer.super.shall_terminate_event, terminationRequestEvent };
+                Handle handles[3] = { gdbServer.super.started_event, gdbServer.super.shall_terminate_event, preTerminationEvent };
                 s32 idx;
                 if(R_SUCCEEDED(res))
                 {
                     debuggerCreateSocketThread();
                     debuggerCreateDebugThread();
-                    res = svcWaitSynchronizationN(&idx, handles, 3, false, 10 * 1000 * 1000 * 1000LL);
+                    res = svcWaitSynchronizationN(&idx, handles, 3, false, 5 * 1000 * 1000 * 1000LL);
                     if(res == 0) res = gdbServer.super.init_result;
                 }
 
@@ -162,7 +162,7 @@ void DebuggerMenu_EnableDebugger(void)
         Draw_FlushFramebuffer();
         Draw_Unlock();
     }
-    while(!(waitInput() & BUTTON_B) && !terminationRequest);
+    while(!(waitInput() & KEY_B) && !menuShouldExit);
 }
 
 void DebuggerMenu_DisableDebugger(void)
@@ -183,7 +183,7 @@ void DebuggerMenu_DisableDebugger(void)
         Draw_FlushFramebuffer();
         Draw_Unlock();
     }
-    while(!(waitInput() & BUTTON_B) && !terminationRequest);
+    while(!(waitInput() & KEY_B) && !menuShouldExit);
 }
 
 void DebuggerMenu_DebugNextApplicationByForce(void)
@@ -232,7 +232,7 @@ void DebuggerMenu_DebugNextApplicationByForce(void)
         Draw_FlushFramebuffer();
         Draw_Unlock();
     }
-    while(!(waitInput() & BUTTON_B) && !terminationRequest);
+    while(!(waitInput() & KEY_B) && !menuShouldExit);
 }
 
 void debuggerSocketThreadMain(void)

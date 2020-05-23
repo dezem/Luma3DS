@@ -29,4 +29,5 @@
 #include <3ds/types.h>
 #include "menu.h"
 
-void ProcessPatchesMenu_PatchUnpatchFSDirectly(void);
+Result OpenProcessByName(const char *name, Handle *h);
+Result PatchProcessByName(const char *name, Result (*func)(u32 size));
