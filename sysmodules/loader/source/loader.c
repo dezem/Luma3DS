@@ -172,9 +172,6 @@ static Result GetProgramInfo(ExHeader_Info *exheaderInfo, u64 programHandle)
     s64 nbSection0Modules;
     svcGetSystemInfo(&nbSection0Modules, 26, 0);
 
-    // Force always having sdmc:/ and nand:/rw permission
-    exheaderInfo->aci.local_caps.storage_info.fs_access_info |= FSACCESS_NANDRW | FSACCESS_SDMC_RW;
-
     // Tweak 3dsx placeholder title exheaderInfo
     if (nbSection0Modules == 6 && exheaderInfo->aci.local_caps.title_id == HBLDR_3DSX_TID)
     {
@@ -182,10 +179,12 @@ static Result GetProgramInfo(ExHeader_Info *exheaderInfo, u64 programHandle)
         HBLDR_PatchExHeaderInfo(exheaderInfo);
         hbldrExit();
     }
-
-    u64 originaltitleId = exheaderInfo->aci.local_caps.title_id;
-    if(CONFIG(PATCHGAMES) && loadTitleExheaderInfo(exheaderInfo->aci.local_caps.title_id, exheaderInfo))
-        exheaderInfo->aci.local_caps.title_id = originaltitleId;
+    else
+    {
+        u64 originaltitleId = exheaderInfo->aci.local_caps.title_id;
+        if(CONFIG(PATCHGAMES) && loadTitleExheaderInfo(exheaderInfo->aci.local_caps.title_id, exheaderInfo))
+            exheaderInfo->aci.local_caps.title_id = originaltitleId;
+    }
 
     return res;
 }
