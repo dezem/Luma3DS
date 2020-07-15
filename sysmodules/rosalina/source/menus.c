@@ -39,6 +39,7 @@
 #include "memory.h"
 #include "fmt.h"
 #include "process_patches.h"
+#include "luminance.h"
 
 Menu rosalinaMenu = {
     "Rosalina menu",
@@ -155,107 +156,92 @@ void RosalinaMenu_Reboot(void)
     while(!menuShouldExit);
 }
 
-static u32 gspPatchAddrN3ds, gspPatchValuesN3ds[2];
-static bool gspPatchDoneN3ds;
-
-static Result RosalinaMenu_PatchN3dsGspForBrightness(u32 size)
-{
-    u32 *off = (u32 *)0x00100000;
-    u32 *end = (u32 *)(0x00100000 + size);
-
-    for (; off < end && (off[0] != 0xE92D4030 || off[1] != 0xE1A04000 || off[2] != 0xE2805C01 || off[3] != 0xE5D0018C); off++);
-
-    if (off >= end) {
-        return -1;
-    }
-
-    gspPatchAddrN3ds = (u32)off;
-    gspPatchValuesN3ds[0] = off[26];
-    gspPatchValuesN3ds[1] = off[50];
-
-    // NOP brightness changing in GSP
-    off[26] = 0xE1A00000;
-    off[50] = 0xE1A00000;
-
-    return 0;
-}
-static Result RosalinaMenu_RevertN3dsGspPatch(u32 size)
-{
-    (void)size;
-
-    u32 *off = (u32 *)gspPatchAddrN3ds;
-    off[26] = gspPatchValuesN3ds[0];
-    off[50] = gspPatchValuesN3ds[1];
-
-    return 0;
-}
-
 void RosalinaMenu_ChangeScreenBrightness(void)
 {
-    Result patchResult = 0;
-    if (isN3DS && !gspPatchDoneN3ds)
-    {
-        patchResult = PatchProcessByName("gsp", RosalinaMenu_PatchN3dsGspForBrightness);
-        gspPatchDoneN3ds = R_SUCCEEDED(patchResult);
-    }
-
     Draw_Lock();
     Draw_ClearFramebuffer();
     Draw_FlushFramebuffer();
     Draw_Unlock();
 
+    // gsp:LCD GetLuminance is stubbed on O3DS so we have to implement it ourselves... damn it.
+    // Assume top and bottom screen luminances are the same (should be; if not, we'll set them to the same values).
+    u32 luminance = getCurrentLuminance(false);
+
     do
     {
-        // Assume the current brightness for both screens are the same.
-        s32 brightness = (s32)(LCD_TOP_BRIGHTNESS & 0xFF);
-
         Draw_Lock();
         Draw_DrawString(10, 10, COLOR_TITLE, "Rosalina menu");
         u32 posY = 30;
-        posY = Draw_DrawFormattedString(10, posY, COLOR_WHITE, "Current brightness (0..255): %3lu\n\n", brightness);
-        if (R_SUCCEEDED(patchResult))
-        {
-            posY = Draw_DrawString(10, posY, COLOR_WHITE, "Press Up/Down for +-1, Right/Left for +-10.\n");
-            posY = Draw_DrawString(10, posY, COLOR_WHITE, "Press Y to revert the GSP patch and exit.\n\n");
+        posY = Draw_DrawFormattedString(10, posY, COLOR_WHITE, "Current luminance: %lu\n\n", luminance);
+        posY = Draw_DrawString(10, posY, COLOR_WHITE, "Controls: Up/Down for +-1, Right/Left for +-10.\n");
+        posY = Draw_DrawString(10, posY, COLOR_WHITE, "Press A to start, B to exit.\n\n");
 
-            posY = Draw_DrawString(10, posY, COLOR_RED, "WARNING: \n");
-            posY = Draw_DrawString(10, posY, COLOR_WHITE, "  * avoid using values far higher than the presets.\n");
-            posY = Draw_DrawString(10, posY, COLOR_WHITE, "  * normal brightness mngmt. is now broken on N3DS.\nYou'll need to press Y to revert");
-        }
-        else
-            Draw_DrawFormattedString(10, posY, COLOR_WHITE, "Failed to patch GSP (0x%08lx).", (u32)patchResult);
-
+        posY = Draw_DrawString(10, posY, COLOR_RED, "WARNING: \n");
+        posY = Draw_DrawString(10, posY, COLOR_WHITE, "  * value will be limited by the presets.\n");
+        posY = Draw_DrawString(10, posY, COLOR_WHITE, "  * bottom framebuffer will be restored until\nyou exit.");
         Draw_FlushFramebuffer();
         Draw_Unlock();
 
         u32 pressed = waitInputWithTimeout(1000);
 
-        if ((pressed & DIRECTIONAL_KEYS) && R_SUCCEEDED(patchResult))
-        {
-            if (pressed & KEY_UP)
-                brightness += 1;
-            else if (pressed & KEY_DOWN)
-                brightness -= 1;
-            else if (pressed & KEY_RIGHT)
-                brightness += 10;
-            else if (pressed & KEY_LEFT)
-                brightness -= 10;
+        if (pressed & KEY_A)
+            break;
 
-            brightness = brightness < 0 ? 0 : brightness;
-            brightness = brightness > 255 ? 255 : brightness;
-            LCD_TOP_BRIGHTNESS = (u32)brightness;
-            LCD_BOT_BRIGHTNESS = (u32)brightness;
-        }
-        else if ((pressed & KEY_Y) && gspPatchDoneN3ds)
-        {
-            patchResult = PatchProcessByName("gsp", RosalinaMenu_RevertN3dsGspPatch);
-            gspPatchDoneN3ds = !R_SUCCEEDED(patchResult);
-            return;
-        }
-        else if (pressed & KEY_B)
+        if (pressed & KEY_B)
             return;
     }
     while (!menuShouldExit);
+
+    Draw_Lock();
+
+    Draw_RestoreFramebuffer();
+    Draw_FreeFramebufferCache();
+
+    svcKernelSetState(0x10000, 2); // unblock gsp
+    gspLcdInit(); // assume it doesn't fail. If it does, brightness won't change, anyway.
+
+    // gsp:LCD will normalize the brightness between top/bottom screen, handle PWM, etc.
+
+    s32 lum = (s32)luminance;
+
+    do
+    {
+        u32 pressed = waitInputWithTimeout(1000);
+        if (pressed & DIRECTIONAL_KEYS)
+        {
+            if (pressed & KEY_UP)
+                lum += 1;
+            else if (pressed & KEY_DOWN)
+                lum -= 1;
+            else if (pressed & KEY_RIGHT)
+                lum += 10;
+            else if (pressed & KEY_LEFT)
+                lum -= 10;
+
+            lum = lum < 0 ? 0 : lum;
+
+            // We need to call gsp here because updating the active duty LUT is a bit tedious (plus, GSP has internal state).
+            // This is actually SetLuminance:
+            GSPLCD_SetBrightnessRaw(BIT(GSP_SCREEN_TOP) | BIT(GSP_SCREEN_BOTTOM), lum);
+        }
+
+        if (pressed & KEY_B)
+            break;
+    }
+    while (!menuShouldExit);
+
+    gspLcdExit();
+    svcKernelSetState(0x10000, 2); // block gsp again
+
+    if (R_FAILED(Draw_AllocateFramebufferCache(FB_BOTTOM_SIZE)))
+    {
+        // Shouldn't happen
+        __builtin_trap();
+    }
+    else
+        Draw_SetupFramebuffer();
+
+    Draw_Unlock();
 }
 
 void RosalinaMenu_PowerOff(void) // Soft shutdown.
@@ -293,18 +279,20 @@ void RosalinaMenu_PowerOff(void) // Soft shutdown.
 static s64 timeSpentConvertingScreenshot = 0;
 static s64 timeSpentWritingScreenshot = 0;
 
-static Result RosalinaMenu_WriteScreenshot(IFile *file, bool top, bool left)
+static Result RosalinaMenu_WriteScreenshot(IFile *file, u32 width, bool top, bool left)
 {
     u64 total;
     Result res = 0;
-    u32 dimX = top ? 400 : 320;
-    u32 lineSize = 3 * dimX;
+    u32 lineSize = 3 * width;
     u32 remaining = lineSize * 240;
+
+    TRY(Draw_AllocateFramebufferCacheForScreenshot(remaining));
+
     u8 *framebufferCache = (u8 *)Draw_GetFramebufferCache();
     u8 *framebufferCacheEnd = framebufferCache + Draw_GetFramebufferCacheSize();
 
     u8 *buf = framebufferCache;
-    Draw_CreateBitmapHeader(framebufferCache, dimX, 240);
+    Draw_CreateBitmapHeader(framebufferCache, width, 240);
     buf += 54;
 
     u32 y = 0;
@@ -315,7 +303,7 @@ static Result RosalinaMenu_WriteScreenshot(IFile *file, bool top, bool left)
         u32 available = (u32)(framebufferCacheEnd - buf);
         u32 size = available < remaining ? available : remaining;
         u32 nlines = size / lineSize;
-        Draw_ConvertFrameBufferLines(buf, y, nlines, top, left);
+        Draw_ConvertFrameBufferLines(buf, width, y, nlines, top, left);
 
         s64 t1 = svcGetSystemTick();
         timeSpentConvertingScreenshot += t1 - t0;
@@ -326,7 +314,10 @@ static Result RosalinaMenu_WriteScreenshot(IFile *file, bool top, bool left)
         remaining -= lineSize * nlines;
         buf = framebufferCache;
     }
-    end: return res;
+    end:
+
+    Draw_FreeFramebufferCache();
+    return res;
 }
 
 void RosalinaMenu_TakeScreenshot(void)
@@ -350,8 +341,15 @@ void RosalinaMenu_TakeScreenshot(void)
     archiveId = isSdMode ? ARCHIVE_SDMC : ARCHIVE_NAND_RW;
     Draw_Lock();
     Draw_RestoreFramebuffer();
+    Draw_FreeFramebufferCache();
 
     svcFlushEntireDataCache();
+
+    bool is3d;
+    u32 topWidth, bottomWidth; // actually Y-dim
+
+    Draw_GetCurrentScreenInfo(&bottomWidth, &is3d, false);
+    Draw_GetCurrentScreenInfo(&topWidth, &is3d, true);
 
     res = FSUSER_OpenArchive(&archive, archiveId, fsMakePath(PATH_EMPTY, ""));
     if(R_SUCCEEDED(res))
@@ -407,24 +405,28 @@ void RosalinaMenu_TakeScreenshot(void)
 
     sprintf(filename, "/luma/screenshots/%04lu-%02lu-%02lu_%02lu-%02lu-%02lu.%03llu_top.bmp", year, month, days, hours, minutes, seconds, milliseconds);
     TRY(IFile_Open(&file, archiveId, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, filename), FS_OPEN_CREATE | FS_OPEN_WRITE));
-    TRY(RosalinaMenu_WriteScreenshot(&file, true, true));
+    TRY(RosalinaMenu_WriteScreenshot(&file, topWidth, true, true));
     TRY(IFile_Close(&file));
 
     sprintf(filename, "/luma/screenshots/%04lu-%02lu-%02lu_%02lu-%02lu-%02lu.%03llu_bot.bmp", year, month, days, hours, minutes, seconds, milliseconds);
     TRY(IFile_Open(&file, archiveId, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, filename), FS_OPEN_CREATE | FS_OPEN_WRITE));
-    TRY(RosalinaMenu_WriteScreenshot(&file, false, true));
+    TRY(RosalinaMenu_WriteScreenshot(&file, bottomWidth, false, true));
     TRY(IFile_Close(&file));
 
-    if((GPU_FB_TOP_FMT & 0x20) && (Draw_GetCurrentFramebufferAddress(true, true) != Draw_GetCurrentFramebufferAddress(true, false)))
+    if(is3d && (Draw_GetCurrentFramebufferAddress(true, true) != Draw_GetCurrentFramebufferAddress(true, false)))
     {
         sprintf(filename, "/luma/screenshots/%04lu-%02lu-%02lu_%02lu-%02lu-%02lu.%03llu_top_right.bmp", year, month, days, hours, minutes, seconds, milliseconds);
         TRY(IFile_Open(&file, archiveId, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, filename), FS_OPEN_CREATE | FS_OPEN_WRITE));
-        TRY(RosalinaMenu_WriteScreenshot(&file, true, false));
+        TRY(RosalinaMenu_WriteScreenshot(&file, topWidth, true, false));
         TRY(IFile_Close(&file));
     }
 
 end:
     IFile_Close(&file);
+
+    if (R_FAILED(Draw_AllocateFramebufferCache(FB_BOTTOM_SIZE)))
+        __builtin_trap(); // We're f***ed if this happens
+
     svcFlushEntireDataCache();
     Draw_SetupFramebuffer();
     Draw_Unlock();
