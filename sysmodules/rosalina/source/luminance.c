@@ -46,7 +46,7 @@ static BlPwmData s_blPwmData = {
     .coeffs = {
         { 0.00111639f, 1.41412f, 0.07178809f },
         { 0.000418169f, 0.66567f, 0.06098654f },
-        { 0.00208543f, 1.55639f, 0.0385939 }
+        { 0.00208543f, 1.55639f, 0.0385939f }
     },
     .numLevels = 5,
     .unk = 0,
@@ -94,6 +94,18 @@ static void readCalibration(void)
         calibRead = R_SUCCEEDED(CFG_GetConfigInfoBlk8(sizeof(BlPwmData), 0x50002, &s_blPwmData));
         cfguExit();
     }
+}
+
+u32 getMinLuminancePreset(void)
+{
+    readCalibration();
+    return s_blPwmData.luminanceLevels[0];
+}
+
+u32 getMaxLuminancePreset(void)
+{
+    readCalibration();
+    return s_blPwmData.luminanceLevels[s_blPwmData.numLevels - 1];
 }
 
 u32 getCurrentLuminance(bool top)

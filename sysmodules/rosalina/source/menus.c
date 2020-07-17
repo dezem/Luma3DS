@@ -63,7 +63,11 @@ Menu rosalinaMenu = {
 
 bool rosalinaMenuShouldShowDebugInfo(void)
 {
-    return true;
+    // Don't show on release builds
+
+    s64 out;
+    svcGetSystemInfo(&out, 0x10000, 0x200);
+    return out == 0;
 }
 
 void RosalinaMenu_ShowDebugInfo(void)
@@ -117,8 +121,8 @@ void RosalinaMenu_ShowCredits(void)
         Draw_DrawString(10, posY, COLOR_WHITE,
             (
                 "Special thanks to:\n"
-                "  Bond697, WinterMute, piepie62, yifanlu\n"
-                "  Luma3DS contributors, ctrulib contributors,\n"
+                "  fincs, WinterMute, mtheall, piepie62,\n"
+                "  Luma3DS contributors, libctru contributors,\n"
                 "  other people"
             ));
 
@@ -138,7 +142,7 @@ void RosalinaMenu_Reboot(void)
     do
     {
         Draw_Lock();
-        Draw_DrawString(10, 10, COLOR_TITLE, "Rosalina menu");
+        Draw_DrawString(10, 10, COLOR_TITLE, "Reboot");
         Draw_DrawString(10, 30, COLOR_WHITE, "Press A to reboot, press B to go back.");
         Draw_FlushFramebuffer();
         Draw_Unlock();
@@ -166,13 +170,23 @@ void RosalinaMenu_ChangeScreenBrightness(void)
     // gsp:LCD GetLuminance is stubbed on O3DS so we have to implement it ourselves... damn it.
     // Assume top and bottom screen luminances are the same (should be; if not, we'll set them to the same values).
     u32 luminance = getCurrentLuminance(false);
+    u32 minLum = getMinLuminancePreset();
+    u32 maxLum = getMaxLuminancePreset();
 
     do
     {
         Draw_Lock();
-        Draw_DrawString(10, 10, COLOR_TITLE, "Rosalina menu");
+        Draw_DrawString(10, 10, COLOR_TITLE, "Screen brightness");
         u32 posY = 30;
-        posY = Draw_DrawFormattedString(10, posY, COLOR_WHITE, "Current luminance: %lu\n\n", luminance);
+        posY = Draw_DrawFormattedString(
+            10,
+            posY,
+            COLOR_WHITE,
+            "Current luminance: %lu (min. %lu, max. %lu)\n\n",
+            luminance,
+            minLum,
+            maxLum
+        );
         posY = Draw_DrawString(10, posY, COLOR_WHITE, "Controls: Up/Down for +-1, Right/Left for +-10.\n");
         posY = Draw_DrawString(10, posY, COLOR_WHITE, "Press A to start, B to exit.\n\n");
 
@@ -218,7 +232,8 @@ void RosalinaMenu_ChangeScreenBrightness(void)
             else if (pressed & KEY_LEFT)
                 lum -= 10;
 
-            lum = lum < 0 ? 0 : lum;
+            lum = lum < (s32)minLum ? (s32)minLum : lum;
+            lum = lum > (s32)maxLum ? (s32)maxLum : lum;
 
             // We need to call gsp here because updating the active duty LUT is a bit tedious (plus, GSP has internal state).
             // This is actually SetLuminance:
@@ -254,7 +269,7 @@ void RosalinaMenu_PowerOff(void) // Soft shutdown.
     do
     {
         Draw_Lock();
-        Draw_DrawString(10, 10, COLOR_TITLE, "Rosalina menu");
+        Draw_DrawString(10, 10, COLOR_TITLE, "Power off");
         Draw_DrawString(10, 30, COLOR_WHITE, "Press A to power off, press B to go back.");
         Draw_FlushFramebuffer();
         Draw_Unlock();
